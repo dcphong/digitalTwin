@@ -53,8 +53,10 @@ class LaneGraph:
         start: Point,
         goal: Point,
         congestion: dict[Point, float] | None = None,
+        blocked_nodes: set[Point] | None = None,
     ) -> tuple[list[Point], float, int]:
         congestion = congestion or {}
+        blocked_nodes = blocked_nodes or set()
         frontier: list[tuple[float, int, Point]] = [(0.0, 0, start)]
         came_from: dict[Point, Point | None] = {start: None}
         cost_so_far = {start: 0.0}
@@ -67,6 +69,8 @@ class LaneGraph:
             if current == goal:
                 break
             for neighbor in self.edges.get(current, ()):
+                if neighbor in blocked_nodes and neighbor != goal:
+                    continue
                 length = self.distance(current, neighbor)
                 dynamic_weight = 1.0 + congestion.get(neighbor, 0.0)
                 new_cost = cost_so_far[current] + length * dynamic_weight
@@ -86,4 +90,3 @@ class LaneGraph:
             current = came_from[current]
         path.reverse()
         return path, cost_so_far[goal], expanded
-

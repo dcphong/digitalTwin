@@ -9,6 +9,8 @@ import time
 from config import (
     ELEVATOR,
     ENTRY,
+    ENTRY_AXIS_X,
+    EXIT_AXIS_X,
     EXIT_POINT,
     LANE_Y,
     METERS_PER_PIXEL,
@@ -30,6 +32,7 @@ class DigitalTwin:
         self.elapsed = 0.0
         self.completed_trips = 0
         self.next_spawn = 0.0
+        self.entry_release_at = 0.0
         self.speed_multiplier = 1.0
         self.paused = False
         self.customer_car_id: int | None = None
@@ -135,9 +138,46 @@ class DigitalTwin:
         start: Point,
         goal: Point,
         ignored_car: Car | None = None,
+        blocked_nodes: set[Point] | None = None,
     ) -> tuple[list[Point], float, int]:
         self.astar_calls += 1
-        return self.graph.astar(start, goal, self.congestion_map(ignored_car))
+        return self.graph.astar(
+            start,
+            goal,
+            self.congestion_map(ignored_car),
+            blocked_nodes,
+        )
+
+    def entry_route(self, car: Car, slot: ParkingSlot) -> tuple[list[Point], float, int]:
+        """Keep arriving cars on the left entry spine."""
+        blocked = {
+            node
+            for node in self.graph.edges
+            if node[0] == EXIT_AXIS_X
+        }
+        return self.find_route(ENTRY, (slot.x, slot.y), car, blocked)
+
+    def exit_route(self, car: Car, slot: ParkingSlot) -> tuple[list[Point], float, int]:
+        """Keep departing cars on the right exit spine, away from the entrance."""
+        blocked = {
+            node
+            for node in self.graph.edges
+            if node[0] == ENTRY_AXIS_X or node == ENTRY
+        }
+        return self.find_route((slot.x, slot.y), EXIT_POINT, car, blocked)
+
+    def entry_is_clear(self) -> bool:
+        """Release one car only after the previous car clears the gate corridor."""
+        if self.elapsed < self.entry_release_at:
+            return False
+        for car in self.cars:
+            if car.state not in {"entering", "leaving"}:
+                continue
+            if math.hypot(car.x - ENTRY[0], car.y - ENTRY[1]) < 105:
+                return False
+            if car.x <= ENTRY_AXIS_X + 24 and car.y >= LANE_Y[-1] - 25:
+                return False
+        return True
 
     def select_empty_guidance(self) -> None:
         candidates = self.available_slots()
@@ -192,11 +232,13 @@ class DigitalTwin:
             self.select_my_car_guidance()
         self.publish_snapshot()
 
-    def start_entering(self, car: Car, slot: ParkingSlot) -> None:
-        route, _, _ = self.find_route(ENTRY, (slot.x, slot.y), car)
+    def start_entering(self, car: Car, slot: ParkingSlot) -> bool:
+        if not self.entry_is_clear():
+            return False
+        route, _, _ = self.entry_route(car, slot)
         if not route:
             car.wait_for = 3.0
-            return
+            return False
         car.state = "entering"
         car.slot_id = slot.slot_id
         car.x, car.y = ENTRY
@@ -205,22 +247,25 @@ class DigitalTwin:
         car.distance_travelled = 0.0
         slot.reserved_by = car.car_id
         self.entry_barrier_open = True
+        self.entry_release_at = self.elapsed + 1.25
         self.last_plate = car.plate
         self.last_event = f"ANPR nhận diện xe vào: {car.plate}"
+        return True
 
-    def start_leaving(self, car: Car) -> None:
+    def start_leaving(self, car: Car) -> bool:
         if not car.slot_id:
-            return
+            return False
         slot = self.slot_by_id[car.slot_id]
-        route, _, _ = self.find_route((slot.x, slot.y), EXIT_POINT, car)
+        route, _, _ = self.exit_route(car, slot)
         if not route:
             car.parked_for = 3.0
-            return
+            return False
         slot.occupied_by = None
         car.state = "leaving"
         car.route = route[1:]
         car.route_index = 0
         car.distance_travelled = 0.0
+        return True
 
     def finish_route(self, car: Car) -> None:
         if car.state == "entering" and car.slot_id:
@@ -294,22 +339,25 @@ class DigitalTwin:
         )
 
         entering_count = sum(car.state == "entering" for car in self.cars)
+        leaving_count = sum(car.state == "leaving" for car in self.cars)
         for car in self.cars:
             if car.state == "parked" and car.car_id != self.customer_car_id:
                 car.parked_for -= dt
-                if car.parked_for <= 0:
-                    self.start_leaving(car)
+                if car.parked_for <= 0 and leaving_count < 10:
+                    if self.start_leaving(car):
+                        leaving_count += 1
             elif car.state in {"entering", "leaving"}:
                 self.move_car(car, dt)
             elif car.state == "waiting":
                 car.wait_for -= dt
 
-        if self.elapsed >= self.next_spawn and entering_count < 9:
+        if self.elapsed >= self.next_spawn and entering_count < 9 and self.entry_is_clear():
             ready = [car for car in self.cars if car.state == "waiting" and car.wait_for <= 0]
             free = self.available_slots()
             if ready and free:
-                self.start_entering(self.rng.choice(ready), self.rng.choice(free))
-                self.next_spawn = self.elapsed + self.rng.uniform(0.55, 1.6)
+                started = self.start_entering(self.rng.choice(ready), self.rng.choice(free))
+                if started:
+                    self.next_spawn = self.elapsed + self.rng.uniform(0.9, 1.8)
 
         self.iot_latency_ms = max(12, min(90, self.iot_latency_ms + self.rng.randint(-2, 2)))
         self.sensor_uptime = 99.7 + 0.3 * math.sin(self.elapsed / 17)
@@ -367,4 +415,3 @@ class DigitalTwin:
                 "slots": slots_json,
             }
         )
-
