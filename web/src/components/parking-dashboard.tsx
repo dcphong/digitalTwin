@@ -119,7 +119,7 @@ export function ParkingDashboard() {
             {[
               ["TRỐNG", stats.free, "text-emerald-400"],
               ["ĐÃ ĐỖ", stats.occupied, "text-rose-400"],
-              ["ĐÃ GIỮ", stats.reserved, "text-sky-400"],
+              ["ĐANG ĐI", 6, "text-sky-400"],
             ].map(([label, value, color]) => (
               <Card key={String(label)} className="border-white/10 bg-white/[0.045] text-center text-white">
                 <CardContent className="p-3">

@@ -24,11 +24,14 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="vi" className={`${vietnam.variable} ${mono.variable} dark antialiased`}>
-      <body>
+    <html
+      lang="vi"
+      suppressHydrationWarning
+      className={`${vietnam.variable} ${mono.variable} dark`}
+    >
+      <body suppressHydrationWarning className="antialiased">
         <TooltipProvider>{children}</TooltipProvider>
       </body>
     </html>
   );
 }
-

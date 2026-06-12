@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/.chrome-test/
+/.dashboard-test.png
 
 # next.js
 /.next/
