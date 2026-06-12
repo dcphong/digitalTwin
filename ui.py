@@ -157,13 +157,17 @@ class Dashboard:
 
         self.draw_button(
             self.button_empty,
-            "TÌM CHỖ ĐỖ TỐT NHẤT",
+            "TẮT HƯỚNG DẪN CHỖ ĐỖ"
+            if self.twin.guide_mode == "empty"
+            else "TÌM CHỖ ĐỖ TỐT NHẤT",
             COLORS["blue"],
             self.twin.guide_mode == "empty",
         )
         self.draw_button(
             self.button_mycar,
-            "DẪN ĐẾN XE CỦA TÔI",
+            "TẮT HƯỚNG DẪN TÌM XE"
+            if self.twin.guide_mode == "mycar"
+            else "DẪN ĐẾN XE CỦA TÔI",
             COLORS["yellow"],
             self.twin.guide_mode == "mycar",
             dark_text=True,
@@ -344,7 +348,7 @@ class Dashboard:
             text_color = COLORS["black"] if mine or slot.occupied_by is None else COLORS["white"]
             self.text(slot.slot_id, rect.center, text_color, "xs", center=True)
             if slot.electric:
-                pygame.draw.circle(self.canvas, COLORS["cyan"], (rect.right - 5, rect.top + 5), 4)
+                self.draw_ev_icon((rect.right - 9, rect.top + 8))
             if slot.accessible:
                 pygame.draw.circle(self.canvas, COLORS["white"], (rect.left + 6, rect.top + 6), 4, 1)
         for index, lane_y in enumerate(LANE_Y):
@@ -355,6 +359,21 @@ class Dashboard:
                 "xs",
                 center=True,
             )
+
+    def draw_ev_icon(self, center: tuple[int, int]) -> None:
+        """Draw a high-contrast charging badge instead of an ambiguous dot."""
+        x, y = center
+        pygame.draw.circle(self.canvas, (8, 25, 34), (x, y), 8)
+        pygame.draw.circle(self.canvas, COLORS["cyan"], (x, y), 8, 2)
+        bolt = [
+            (x + 1, y - 6),
+            (x - 4, y + 1),
+            (x, y + 1),
+            (x - 1, y + 7),
+            (x + 5, y - 1),
+            (x + 1, y - 1),
+        ]
+        pygame.draw.polygon(self.canvas, COLORS["yellow"], bolt)
 
     def draw_infrastructure(self) -> None:
         self.card(pygame.Rect(398, 88, 58, 58), (28, 42, 57), 10)

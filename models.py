@@ -39,6 +39,7 @@ class Car:
     wait_for: float = 0.0
     angle: float = 0.0
     distance_travelled: float = 0.0
+    current_speed: float = 0.0
 
 
 class SharedBridge:
@@ -66,4 +67,3 @@ class SharedBridge:
             actions = self._actions[:]
             self._actions.clear()
             return actions
-

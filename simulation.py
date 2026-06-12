@@ -227,9 +227,15 @@ class DigitalTwin:
 
     def handle_action(self, action: str) -> None:
         if action == "empty":
-            self.select_empty_guidance()
+            if self.guide_mode == "empty":
+                self._clear_guidance("Đã tắt hướng dẫn đến chỗ đỗ.")
+            else:
+                self.select_empty_guidance()
         elif action == "mycar":
-            self.select_my_car_guidance()
+            if self.guide_mode == "mycar":
+                self._clear_guidance("Đã tắt hướng dẫn đến xe của bạn.")
+            else:
+                self.select_my_car_guidance()
         self.publish_snapshot()
 
     def start_entering(self, car: Car, slot: ParkingSlot) -> bool:
@@ -245,6 +251,7 @@ class DigitalTwin:
         car.route = route[1:]
         car.route_index = 0
         car.distance_travelled = 0.0
+        car.current_speed = 0.0
         slot.reserved_by = car.car_id
         self.entry_barrier_open = True
         self.entry_release_at = self.elapsed + 1.25
@@ -265,6 +272,7 @@ class DigitalTwin:
         car.route = route[1:]
         car.route_index = 0
         car.distance_travelled = 0.0
+        car.current_speed = 0.0
         return True
 
     def finish_route(self, car: Car) -> None:
@@ -274,6 +282,7 @@ class DigitalTwin:
             slot.occupied_by = car.car_id
             car.state = "parked"
             car.x, car.y = slot.x, slot.y
+            car.current_speed = 0.0
             car.parked_for = self.rng.uniform(28, 90)
             self.last_event = f"Cảm biến xác nhận {slot.slot_id} đã có xe"
         elif car.state == "leaving":
@@ -283,9 +292,11 @@ class DigitalTwin:
             car.state = "waiting"
             car.slot_id = None
             car.wait_for = self.rng.uniform(10, 38)
+            car.current_speed = 0.0
             self.completed_trips += 1
 
     def traffic_factor(self, car: Car, dx: float, dy: float, distance: float) -> float:
+        """Adaptive cruise control with a full stop behind stationary traffic."""
         if distance < 0.001:
             return 1.0
         ux, uy = dx / distance, dy / distance
@@ -295,8 +306,18 @@ class DigitalTwin:
                 continue
             ox, oy = other.x - car.x, other.y - car.y
             gap = math.hypot(ox, oy)
-            if gap < 52 and ox * ux + oy * uy > 0:
-                factor = min(factor, max(0.06, (gap - 21) / 31))
+            forward_gap = ox * ux + oy * uy
+            lateral_gap = abs(ox * uy - oy * ux)
+            if forward_gap <= 0 or forward_gap > 90 or lateral_gap > 17:
+                continue
+
+            safe_gap = 36.0
+            if other.current_speed < 2.0 and forward_gap <= safe_gap:
+                return 0.0
+
+            spacing_factor = max(0.0, min(1.0, (forward_gap - 27.0) / 40.0))
+            leader_factor = max(0.12, other.current_speed / max(car.speed, 1.0))
+            factor = min(factor, spacing_factor, leader_factor + 0.18)
         return factor
 
     def move_car(self, car: Car, dt: float) -> None:
@@ -307,10 +328,13 @@ class DigitalTwin:
         dx, dy = tx - car.x, ty - car.y
         distance = math.hypot(dx, dy)
         if distance < 0.001:
+            car.current_speed = 0.0
             car.route_index += 1
             return
         car.angle = math.degrees(math.atan2(-dy, dx))
-        step = car.speed * dt * self.traffic_factor(car, dx, dy, distance)
+        factor = self.traffic_factor(car, dx, dy, distance)
+        car.current_speed = car.speed * factor
+        step = car.current_speed * dt
         if step >= distance:
             car.x, car.y = tx, ty
             car.distance_travelled += distance
