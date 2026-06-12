@@ -50,6 +50,10 @@ class Dashboard:
         self.qr_surface = self._make_qr(url)
         self.button_empty = pygame.Rect(22, 365, 346, 48)
         self.button_mycar = pygame.Rect(22, 421, 346, 48)
+        self.speed_buttons = [
+            (speed, pygame.Rect(36 + index * 62, 902, 55, 25))
+            for index, speed in enumerate((0.5, 1.0, 2.0, 4.0, 8.0))
+        ]
 
     @staticmethod
     def _font_paths() -> tuple[str | None, str | None, str | None]:
@@ -222,7 +226,20 @@ class Dashboard:
             y = 856 + (index // 2) * 25
             pygame.draw.rect(self.canvas, color, (x, y, 13, 13), border_radius=3)
             self.text(label, (x + 21, y - 2), COLORS["muted"], "xs")
-        self.text("1/2: dẫn đường   G: graph   +/-: tốc độ", (36, 909), COLORS["muted"], "xs")
+        for speed, rect in self.speed_buttons:
+            active = self.twin.speed_multiplier == speed
+            hover = rect.collidepoint(self.logical_mouse())
+            fill = COLORS["cyan"] if active else (45, 59, 76) if hover else (32, 45, 61)
+            text_color = COLORS["black"] if active else COLORS["white"]
+            pygame.draw.rect(self.canvas, fill, rect, border_radius=6)
+            pygame.draw.rect(
+                self.canvas,
+                COLORS["white"] if active else (70, 86, 105),
+                rect,
+                1,
+                border_radius=6,
+            )
+            self.text(f"{speed:g}x", rect.center, text_color, "xs", center=True)
 
     def draw_button(
         self,
@@ -490,6 +507,15 @@ class Dashboard:
                     self.twin.speed_multiplier = min(8, self.twin.speed_multiplier * 2)
                 elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
                     self.twin.speed_multiplier = max(0.5, self.twin.speed_multiplier / 2)
+                elif event.key in (
+                    pygame.K_3,
+                    pygame.K_4,
+                    pygame.K_5,
+                    pygame.K_6,
+                    pygame.K_7,
+                ):
+                    speed_index = event.key - pygame.K_3
+                    self.twin.speed_multiplier = (0.5, 1.0, 2.0, 4.0, 8.0)[speed_index]
                 elif event.key == pygame.K_r:
                     count = len(self.twin.cars)
                     bridge = self.twin.bridge
@@ -500,6 +526,11 @@ class Dashboard:
                     self.twin.handle_action("empty")
                 elif self.button_mycar.collidepoint(point):
                     self.twin.handle_action("mycar")
+                else:
+                    for speed, rect in self.speed_buttons:
+                        if rect.collidepoint(point):
+                            self.twin.speed_multiplier = speed
+                            break
         return True
 
     def draw(self) -> None:
