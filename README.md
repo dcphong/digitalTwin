@@ -49,5 +49,15 @@ ui.py            Dashboard Pygame
 web_server.py    Giao diện khách hàng qua QR
 models.py        Model dữ liệu và bridge thread-safe
 config.py        Cấu hình hình học và màu sắc
+web/             Dashboard web Next.js, Tailwind, shadcn và Motion
 ```
 
+## Phiên bản Web
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Mở `http://localhost:3000` để xem dashboard web responsive.
