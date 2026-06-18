@@ -29,7 +29,10 @@ class Dashboard:
         pygame.init()
         pygame.display.set_caption("Digital Twin Smart Parking - Tầng B1")
         flags = 0 if smoke_test else pygame.RESIZABLE
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT), flags)
+        self.screen = pygame.display.set_mode(
+            (WIDTH, HEIGHT) if smoke_test else self.initial_window_size(),
+            flags,
+        )
         self.canvas = pygame.Surface((WIDTH, HEIGHT))
         self.clock = pygame.time.Clock()
         self.twin = twin
@@ -56,6 +59,22 @@ class Dashboard:
             (speed, pygame.Rect(36 + index * 62, 908, 55, 25))
             for index, speed in enumerate((0.5, 1.0, 2.0, 4.0, 8.0))
         ]
+
+    @staticmethod
+    def initial_window_size() -> tuple[int, int]:
+        display = pygame.display.Info()
+        max_w = max(640, int(display.current_w * 0.94))
+        max_h = max(480, int(display.current_h * 0.88))
+        scale = min(max_w / WIDTH, max_h / HEIGHT, 1.0)
+        return max(640, int(WIDTH * scale)), max(480, int(HEIGHT * scale))
+
+    def viewport(self) -> tuple[pygame.Rect, float]:
+        sw, sh = self.screen.get_size()
+        scale = min(sw / WIDTH, sh / HEIGHT)
+        view_w = max(1, int(WIDTH * scale))
+        view_h = max(1, int(HEIGHT * scale))
+        rect = pygame.Rect((sw - view_w) // 2, (sh - view_h) // 2, view_w, view_h)
+        return rect, scale
 
     @staticmethod
     def _font_paths() -> tuple[str | None, str | None, str | None]:
@@ -663,8 +682,10 @@ class Dashboard:
 
     def logical_mouse(self) -> tuple[int, int]:
         mx, my = pygame.mouse.get_pos()
-        sw, sh = self.screen.get_size()
-        return int(mx * WIDTH / max(1, sw)), int(my * HEIGHT / max(1, sh))
+        rect, scale = self.viewport()
+        if not rect.collidepoint(mx, my):
+            return -1, -1
+        return int((mx - rect.x) / scale), int((my - rect.y) / scale)
 
     def process_events(self) -> bool:
         for event in pygame.event.get():
@@ -729,12 +750,14 @@ class Dashboard:
         self.canvas.fill(COLORS["background"])
         self.draw_lot()
         self.draw_sidebar()
-        if self.screen.get_size() == (WIDTH, HEIGHT):
+        rect, _scale = self.viewport()
+        self.screen.fill(COLORS["background"])
+        if rect.size == (WIDTH, HEIGHT):
             self.screen.blit(self.canvas, (0, 0))
         else:
             self.screen.blit(
-                pygame.transform.smoothscale(self.canvas, self.screen.get_size()),
-                (0, 0),
+                pygame.transform.smoothscale(self.canvas, rect.size),
+                rect,
             )
         pygame.display.flip()
 
