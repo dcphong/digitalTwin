@@ -37,6 +37,8 @@ class Dashboard:
         self.smoke_test = smoke_test
         self.show_graph = False
         self.frames = 0
+        self.billing_rect = pygame.Rect(22, 618, 346, 218)
+        self.billing_scroll = 0
 
         regular, semibold, bold = self._font_paths()
         self.fonts = {
@@ -51,7 +53,7 @@ class Dashboard:
         self.button_empty = pygame.Rect(22, 365, 346, 48)
         self.button_mycar = pygame.Rect(22, 421, 346, 48)
         self.speed_buttons = [
-            (speed, pygame.Rect(36 + index * 62, 902, 55, 25))
+            (speed, pygame.Rect(36 + index * 62, 908, 55, 25))
             for index, speed in enumerate((0.5, 1.0, 2.0, 4.0, 8.0))
         ]
 
@@ -87,6 +89,65 @@ class Dashboard:
         image = qr.make_image(fill_color="#07101c", back_color="white").convert("RGB")
         image = image.resize((132, 132))
         return pygame.image.frombytes(image.tobytes(), image.size, "RGB")
+
+    @staticmethod
+    def format_duration(minutes: float) -> str:
+        total = max(0, int(minutes + 0.5))
+        hours, mins = divmod(total, 60)
+        if hours:
+            return f"{hours}h {mins:02d}m"
+        return f"{mins}m"
+
+    @staticmethod
+    def format_vnd(value: int) -> str:
+        if value <= 0:
+            return "0 VND"
+        return f"{value:,}".replace(",", ".") + " VND"
+
+    @staticmethod
+    def rounded_polyline(
+        points: list[tuple[int, int]],
+        radius: float = 28.0,
+        steps: int = 7,
+    ) -> list[tuple[int, int]]:
+        if len(points) < 3:
+            return points
+        rounded: list[tuple[float, float]] = [points[0]]
+        for index in range(1, len(points) - 1):
+            prev = points[index - 1]
+            current = points[index]
+            nxt = points[index + 1]
+            in_dx, in_dy = current[0] - prev[0], current[1] - prev[1]
+            out_dx, out_dy = nxt[0] - current[0], nxt[1] - current[1]
+            in_len = math.hypot(in_dx, in_dy)
+            out_len = math.hypot(out_dx, out_dy)
+            if in_len < 1 or out_len < 1:
+                continue
+            cross = in_dx * out_dy - in_dy * out_dx
+            if abs(cross) < 0.01:
+                rounded.append(current)
+                continue
+            turn_radius = min(radius, in_len * 0.42, out_len * 0.42)
+            p1 = (
+                current[0] - in_dx / in_len * turn_radius,
+                current[1] - in_dy / in_len * turn_radius,
+            )
+            p2 = (
+                current[0] + out_dx / out_len * turn_radius,
+                current[1] + out_dy / out_len * turn_radius,
+            )
+            rounded.append(p1)
+            for step in range(1, steps + 1):
+                t = step / steps
+                inv = 1.0 - t
+                rounded.append(
+                    (
+                        inv * inv * p1[0] + 2 * inv * t * current[0] + t * t * p2[0],
+                        inv * inv * p1[1] + 2 * inv * t * current[1] + t * t * p2[1],
+                    )
+                )
+        rounded.append(points[-1])
+        return [(round(x), round(y)) for x, y in rounded]
 
     def text(
         self,
@@ -196,25 +257,10 @@ class Dashboard:
             self.text(value, (x, 554), COLORS["white"], "medium")
             self.text(label, (x, 579), COLORS["muted"], "xs")
 
-        self.card(pygame.Rect(22, 618, 346, 178))
-        self.text("HẠ TẦNG BÃI XE HIỆN ĐẠI", (36, 632), COLORS["white"], "medium")
-        technologies = [
-            ("ANPR / Biển số", snapshot.get("last_plate", "---"), COLORS["purple"]),
-            ("Cảm biến IoT", f"{snapshot.get('sensor_uptime', 0)}%", COLORS["green"]),
-            ("Độ trễ dữ liệu", f"{snapshot.get('iot_latency', 0)} ms", COLORS["cyan"]),
-            ("Trạm sạc EV", "10 vị trí", COLORS["blue"]),
-            ("Thanh toán số", "Sẵn sàng", COLORS["yellow"]),
-            ("Barrier tự động", "Đang kết nối", COLORS["orange"]),
-        ]
-        for index, (label, value, color) in enumerate(technologies):
-            column, row = index % 2, index // 2
-            x, y = 36 + column * 164, 667 + row * 39
-            pygame.draw.circle(self.canvas, color, (x + 5, y + 7), 5)
-            self.text(label, (x + 16, y - 2), COLORS["muted"], "xs")
-            self.text(value, (x + 16, y + 14), COLORS["white"], "sm", max_width=135)
+        self.draw_billing_card(self.billing_rect)
 
-        self.card(pygame.Rect(22, 811, 346, 126))
-        self.text("CHÚ GIẢI & ĐIỀU KHIỂN", (36, 825), COLORS["white"], "medium")
+        self.card(pygame.Rect(22, 850, 346, 88))
+        self.text("CHÚ GIẢI & ĐIỀU KHIỂN", (36, 862), COLORS["white"], "medium")
         legends = [
             (COLORS["green"], "Trống"),
             (COLORS["red"], "Đã đỗ"),
@@ -223,7 +269,7 @@ class Dashboard:
         ]
         for index, (color, label) in enumerate(legends):
             x = 36 + (index % 2) * 150
-            y = 856 + (index // 2) * 25
+            y = 889 + (index // 2) * 19
             pygame.draw.rect(self.canvas, color, (x, y, 13, 13), border_radius=3)
             self.text(label, (x + 21, y - 2), COLORS["muted"], "xs")
         for speed, rect in self.speed_buttons:
@@ -240,6 +286,83 @@ class Dashboard:
                 border_radius=6,
             )
             self.text(f"{speed:g}x", rect.center, text_color, "xs", center=True)
+
+    def draw_billing_card(self, rect: pygame.Rect) -> None:
+        self.card(rect, (22, 35, 52), 15)
+        self.text("BẢNG TÍNH PHÍ ĐỖ XE", (rect.x + 14, rect.y + 14), COLORS["white"], "medium")
+        self.text(
+            "Miễn phí 10p • 10.000 VND/30p đầu • +5.000 VND/30p",
+            (rect.x + 14, rect.y + 38),
+            COLORS["muted"],
+            "xs",
+            max_width=232,
+        )
+
+        header_y = rect.y + 64
+        self.text("BIỂN SỐ", (rect.x + 14, header_y), COLORS["cyan"], "xs")
+        self.text("Ô", (rect.x + 134, header_y), COLORS["cyan"], "xs")
+        self.text("TG", (rect.x + 205, header_y), COLORS["cyan"], "xs")
+        self.text("PHÍ", (rect.right - 14, header_y), COLORS["cyan"], "xs", right=True)
+        pygame.draw.line(
+            self.canvas,
+            (45, 63, 83),
+            (rect.x + 14, header_y + 19),
+            (rect.right - 14, header_y + 19),
+            1,
+        )
+
+        visible_count = 6
+        rows = self.twin.billing_rows(100)
+        max_scroll = max(0, len(rows) - visible_count)
+        self.billing_scroll = max(0, min(self.billing_scroll, max_scroll))
+        visible_rows = rows[self.billing_scroll:self.billing_scroll + visible_count]
+        row_y = header_y + 29
+        if not rows:
+            self.text("Chưa có xe đang đỗ.", (rect.x + 14, row_y), COLORS["muted"], "sm")
+            return
+        for index, row in enumerate(visible_rows):
+            y = row_y + index * 22
+            mine = bool(row["mine"])
+            if mine:
+                highlight = pygame.Rect(rect.x + 9, y - 4, rect.w - 27, 20)
+                pygame.draw.rect(self.canvas, (60, 46, 16), highlight, border_radius=7)
+                pygame.draw.rect(self.canvas, COLORS["yellow"], highlight, 1, border_radius=7)
+            color = COLORS["yellow"] if mine else COLORS["white"]
+            self.text(row["plate"], (rect.x + 14, y), color, "xs", max_width=116)
+            self.text(row["slot"], (rect.x + 134, y), COLORS["white"], "xs", max_width=60)
+            self.text(
+                self.format_duration(float(row["minutes"])),
+                (rect.x + 205, y),
+                COLORS["white"],
+                "xs",
+                max_width=54,
+            )
+            self.text(
+                self.format_vnd(int(row["fee_vnd"])),
+                (rect.right - 14, y),
+                COLORS["green"] if int(row["fee_vnd"]) else COLORS["muted"],
+                "xs",
+                right=True,
+                max_width=82,
+            )
+        if max_scroll:
+            track = pygame.Rect(rect.right - 10, row_y - 2, 4, visible_count * 22 + 2)
+            thumb_h = max(18, int(track.h * visible_count / len(rows)))
+            thumb_y = track.y + int((track.h - thumb_h) * self.billing_scroll / max_scroll)
+            pygame.draw.rect(self.canvas, (42, 57, 76), track, border_radius=2)
+            pygame.draw.rect(
+                self.canvas,
+                COLORS["cyan"],
+                (track.x, thumb_y, track.w, thumb_h),
+                border_radius=2,
+            )
+            self.text(
+                f"{self.billing_scroll + 1}-{self.billing_scroll + len(visible_rows)}/{len(rows)}",
+                (rect.right - 14, rect.y + 38),
+                COLORS["cyan"],
+                "xs",
+                right=True,
+            )
 
     def draw_button(
         self,
@@ -296,11 +419,20 @@ class Dashboard:
         )
 
     def draw_roads(self) -> None:
+        curb = (30, 39, 50)
+        lane_shadow = (26, 34, 44)
         for lane_y in LANE_Y:
+            pygame.draw.rect(
+                self.canvas,
+                curb,
+                (ENTRY_AXIS_X - 10, lane_y - 31, EXIT_AXIS_X - ENTRY_AXIS_X + 20, 62),
+                border_radius=18,
+            )
             pygame.draw.rect(
                 self.canvas,
                 COLORS["road"],
                 (ENTRY_AXIS_X, lane_y - 23, EXIT_AXIS_X - ENTRY_AXIS_X, 46),
+                border_radius=14,
             )
             for x in range(510, 1490, 74):
                 pygame.draw.line(
@@ -318,9 +450,16 @@ class Dashboard:
                     [(x - 9, lane_y - 6), (x + 2, lane_y), (x - 9, lane_y + 6)],
                     2,
                 )
-        pygame.draw.rect(self.canvas, COLORS["road"], (442, 83, 46, 843))
-        pygame.draw.rect(self.canvas, COLORS["road"], (1507, 83, 46, 843))
-        pygame.draw.rect(self.canvas, COLORS["road"], (390, 902, 1210, 48))
+            for axis_x in (ENTRY_AXIS_X, EXIT_AXIS_X):
+                pygame.draw.circle(self.canvas, curb, (round(axis_x), round(lane_y)), 31)
+                pygame.draw.circle(self.canvas, COLORS["road"], (round(axis_x), round(lane_y)), 23)
+
+        pygame.draw.rect(self.canvas, curb, (434, 83, 62, 843), border_radius=20)
+        pygame.draw.rect(self.canvas, curb, (1499, 83, 62, 843), border_radius=20)
+        pygame.draw.rect(self.canvas, COLORS["road"], (442, 83, 46, 843), border_radius=16)
+        pygame.draw.rect(self.canvas, COLORS["road"], (1507, 83, 46, 843), border_radius=16)
+        pygame.draw.rect(self.canvas, lane_shadow, (390, 894, 1210, 64), border_radius=20)
+        pygame.draw.rect(self.canvas, COLORS["road"], (390, 902, 1210, 48), border_radius=16)
         for y in range(130, 890, 115):
             pygame.draw.lines(
                 self.canvas,
@@ -334,6 +473,14 @@ class Dashboard:
                 COLORS["road_line"],
                 False,
                 [(1523, y - 8), (1530, y + 3), (1537, y - 8)],
+                2,
+            )
+        for x in range(470, 1540, 105):
+            pygame.draw.line(
+                self.canvas,
+                COLORS["road_line"],
+                (x, 926),
+                (x + 42, 926),
                 2,
             )
 
@@ -362,10 +509,12 @@ class Dashboard:
             pygame.draw.rect(self.canvas, (17, 23, 31), rect.inflate(4, 4), border_radius=7)
             pygame.draw.rect(self.canvas, color, rect, border_radius=6)
             pygame.draw.rect(self.canvas, (255, 255, 255), rect, 1, border_radius=6)
+            if slot.electric:
+                pygame.draw.rect(self.canvas, COLORS["cyan"], rect.inflate(5, 5), 2, border_radius=8)
             text_color = COLORS["black"] if mine or slot.occupied_by is None else COLORS["white"]
             self.text(slot.slot_id, rect.center, text_color, "xs", center=True)
             if slot.electric:
-                self.draw_ev_icon((rect.right - 9, rect.top + 8))
+                self.draw_ev_icon((rect.right - 11, rect.top + 11))
             if slot.accessible:
                 pygame.draw.circle(self.canvas, COLORS["white"], (rect.left + 6, rect.top + 6), 4, 1)
         for index, lane_y in enumerate(LANE_Y):
@@ -380,15 +529,15 @@ class Dashboard:
     def draw_ev_icon(self, center: tuple[int, int]) -> None:
         """Draw a high-contrast charging badge instead of an ambiguous dot."""
         x, y = center
-        pygame.draw.circle(self.canvas, (8, 25, 34), (x, y), 8)
-        pygame.draw.circle(self.canvas, COLORS["cyan"], (x, y), 8, 2)
+        pygame.draw.circle(self.canvas, (4, 16, 24), (x, y), 11)
+        pygame.draw.circle(self.canvas, COLORS["cyan"], (x, y), 11, 2)
         bolt = [
-            (x + 1, y - 6),
-            (x - 4, y + 1),
+            (x + 2, y - 8),
+            (x - 5, y + 1),
             (x, y + 1),
-            (x - 1, y + 7),
-            (x + 5, y - 1),
-            (x + 1, y - 1),
+            (x - 2, y + 9),
+            (x + 7, y - 2),
+            (x + 2, y - 2),
         ]
         pygame.draw.polygon(self.canvas, COLORS["yellow"], bolt)
 
@@ -438,17 +587,22 @@ class Dashboard:
         if len(path) < 2:
             return
         color = COLORS["yellow"] if self.twin.guide_mode == "mycar" else COLORS["blue"]
-        points = [(round(x), round(y)) for x, y in path]
+        if self.twin.guide_mode == "empty" and self.twin.guide_target:
+            slot = self.twin.slot_by_id.get(self.twin.guide_target)
+            if slot:
+                path = self.twin.entry_route_points(slot)
+        points = self.rounded_polyline([(round(x), round(y)) for x, y in path], radius=36.0, steps=9)
         pygame.draw.lines(self.canvas, COLORS["black"], False, points, 11)
         pygame.draw.lines(self.canvas, color, False, points, 5)
-        phase = (time.monotonic() * 90) % 40
+        spacing = 42
+        remaining = (time.monotonic() * 95) % spacing
         for first, second in zip(points, points[1:]):
             length = math.dist(first, second)
             if length < 1:
                 continue
             ux = (second[0] - first[0]) / length
             uy = (second[1] - first[1]) / length
-            marker = phase
+            marker = remaining
             while marker < length:
                 pygame.draw.circle(
                     self.canvas,
@@ -456,7 +610,29 @@ class Dashboard:
                     (round(first[0] + ux * marker), round(first[1] + uy * marker)),
                     3,
                 )
-                marker += 40
+                marker += spacing
+            remaining = marker - length
+        first, second = points[-2], points[-1]
+        length = math.dist(first, second)
+        if length >= 1:
+            ux = (second[0] - first[0]) / length
+            uy = (second[1] - first[1]) / length
+            wing = 10
+            pygame.draw.polygon(
+                self.canvas,
+                color,
+                [
+                    second,
+                    (
+                        round(second[0] - ux * 18 - uy * wing),
+                        round(second[1] - uy * 18 + ux * wing),
+                    ),
+                    (
+                        round(second[0] - ux * 18 + uy * wing),
+                        round(second[1] - uy * 18 - ux * wing),
+                    ),
+                ],
+            )
         pulse = 13 + int(4 * math.sin(time.monotonic() * 5))
         pygame.draw.circle(self.canvas, color, points[-1], pulse, 3)
 
@@ -474,15 +650,15 @@ class Dashboard:
         self.canvas.blit(rotated, rotated.get_rect(center=(round(car.x), round(car.y))))
 
     def draw_event_bar(self) -> None:
-        rect = pygame.Rect(645, 862, 650, 34)
+        rect = pygame.Rect(780, 49, 590, 25)
         pygame.draw.rect(self.canvas, (12, 19, 29, 225), rect, border_radius=10)
-        pygame.draw.circle(self.canvas, COLORS["green"], (663, 879), 5)
+        pygame.draw.circle(self.canvas, COLORS["green"], (rect.x + 16, rect.centery), 5)
         self.text(
             self.twin.last_event,
-            (676, 869),
+            (rect.x + 29, rect.y + 5),
             COLORS["white"],
             "sm",
-            max_width=600,
+            max_width=540,
         )
 
     def logical_mouse(self) -> tuple[int, int]:
@@ -531,6 +707,22 @@ class Dashboard:
                         if rect.collidepoint(point):
                             self.twin.speed_multiplier = speed
                             break
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button in (4, 5):
+                point = self.logical_mouse()
+                if self.billing_rect.collidepoint(point):
+                    rows = self.twin.billing_rows(100)
+                    max_scroll = max(0, len(rows) - 6)
+                    delta = -1 if event.button == 4 else 1
+                    self.billing_scroll = max(0, min(max_scroll, self.billing_scroll + delta))
+            if event.type == pygame.MOUSEWHEEL:
+                point = self.logical_mouse()
+                if self.billing_rect.collidepoint(point):
+                    rows = self.twin.billing_rows(100)
+                    max_scroll = max(0, len(rows) - 6)
+                    self.billing_scroll = max(
+                        0,
+                        min(max_scroll, self.billing_scroll - event.y),
+                    )
         return True
 
     def draw(self) -> None:

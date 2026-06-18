@@ -36,6 +36,9 @@ class Car:
     route_index: int = 0
     speed: float = 120.0
     parked_for: float = 0.0
+    parked_started_at: float | None = None
+    last_parking_minutes: float = 0.0
+    last_fee_vnd: int = 0
     wait_for: float = 0.0
     angle: float = 0.0
     distance_travelled: float = 0.0

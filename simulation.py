@@ -19,6 +19,13 @@ from config import (
 from models import Car, ParkingSlot, SharedBridge
 from navigation import LaneGraph, Point
 
+GRACE_MINUTES = 10
+FIRST_BLOCK_MINUTES = 30
+FIRST_BLOCK_FEE = 10_000
+NEXT_BLOCK_MINUTES = 30
+NEXT_BLOCK_FEE = 5_000
+DAILY_MAX_FEE = 80_000
+
 
 class DigitalTwin:
     def __init__(self, car_count: int, bridge: SharedBridge, seed: int = 2026) -> None:
@@ -103,6 +110,7 @@ class DigitalTwin:
             car.state = "parked"
             car.x, car.y = slot.x, slot.y
             car.slot_id = slot.slot_id
+            car.parked_started_at = -self.rng.uniform(8, 145)
             car.parked_for = self.rng.uniform(25, 95)
             slot.occupied_by = car.car_id
         for car in self.cars[initial_count:]:
@@ -111,6 +119,47 @@ class DigitalTwin:
             customer = self.cars[0]
             self.customer_car_id = customer.car_id
             customer.parked_for = 10**9
+
+    def parking_minutes(self, car: Car) -> float:
+        if car.parked_started_at is None:
+            return 0.0
+        return max(0.0, self.elapsed - car.parked_started_at)
+
+    @staticmethod
+    def parking_fee_vnd(minutes: float) -> int:
+        if minutes <= GRACE_MINUTES:
+            return 0
+        billable = minutes - GRACE_MINUTES
+        if billable <= FIRST_BLOCK_MINUTES:
+            return FIRST_BLOCK_FEE
+        extra_blocks = math.ceil((billable - FIRST_BLOCK_MINUTES) / NEXT_BLOCK_MINUTES)
+        return min(DAILY_MAX_FEE, FIRST_BLOCK_FEE + extra_blocks * NEXT_BLOCK_FEE)
+
+    def billing_rows(self, limit: int = 5) -> list[dict[str, object]]:
+        parked = [
+            car
+            for car in self.cars
+            if car.state == "parked" and car.slot_id is not None
+        ]
+        parked.sort(
+            key=lambda car: (
+                car.car_id != self.customer_car_id,
+                -self.parking_minutes(car),
+            )
+        )
+        rows: list[dict[str, object]] = []
+        for car in parked[:limit]:
+            minutes = self.parking_minutes(car)
+            rows.append(
+                {
+                    "plate": car.plate,
+                    "slot": car.slot_id or "--",
+                    "minutes": minutes,
+                    "fee_vnd": self.parking_fee_vnd(minutes),
+                    "mine": car.car_id == self.customer_car_id,
+                }
+            )
+        return rows
 
     def available_slots(self) -> list[ParkingSlot]:
         return [
@@ -148,6 +197,38 @@ class DigitalTwin:
             blocked_nodes,
         )
 
+    @staticmethod
+    def route_cost(points: list[Point]) -> float:
+        return sum(math.dist(first, second) for first, second in zip(points, points[1:]))
+
+    @staticmethod
+    def drive_lane_y(slot: ParkingSlot) -> float:
+        return slot.lane_y - 10.0 if slot.y < slot.lane_y else slot.lane_y + 10.0
+
+    def entry_route_points(self, slot: ParkingSlot) -> list[Point]:
+        drive_y = self.drive_lane_y(slot)
+        approach_x = max(ENTRY_AXIS_X + 48.0, slot.x - 34.0)
+        return [
+            ENTRY,
+            (ENTRY_AXIS_X, ENTRY[1]),
+            (ENTRY_AXIS_X, drive_y),
+            (approach_x, drive_y),
+            (slot.x, drive_y),
+            (slot.x, slot.y),
+        ]
+
+    def exit_route_points(self, slot: ParkingSlot) -> list[Point]:
+        drive_y = self.drive_lane_y(slot)
+        merge_x = min(EXIT_AXIS_X - 48.0, slot.x + 34.0)
+        return [
+            (slot.x, slot.y),
+            (slot.x, drive_y),
+            (merge_x, drive_y),
+            (EXIT_AXIS_X, drive_y),
+            (EXIT_AXIS_X, EXIT_POINT[1]),
+            EXIT_POINT,
+        ]
+
     def entry_route(self, car: Car, slot: ParkingSlot) -> tuple[list[Point], float, int]:
         """Keep arriving cars on the left entry spine."""
         blocked = {
@@ -155,7 +236,9 @@ class DigitalTwin:
             for node in self.graph.edges
             if node[0] == EXIT_AXIS_X
         }
-        return self.find_route(ENTRY, (slot.x, slot.y), car, blocked)
+        _, _, expanded = self.find_route(ENTRY, (slot.x, slot.y), car, blocked)
+        route = self.entry_route_points(slot)
+        return route, self.route_cost(route), expanded
 
     def exit_route(self, car: Car, slot: ParkingSlot) -> tuple[list[Point], float, int]:
         """Keep departing cars on the right exit spine, away from the entrance."""
@@ -164,7 +247,9 @@ class DigitalTwin:
             for node in self.graph.edges
             if node[0] == ENTRY_AXIS_X or node == ENTRY
         }
-        return self.find_route((slot.x, slot.y), EXIT_POINT, car, blocked)
+        _, _, expanded = self.find_route((slot.x, slot.y), EXIT_POINT, car, blocked)
+        route = self.exit_route_points(slot)
+        return route, self.route_cost(route), expanded
 
     def entry_is_clear(self) -> bool:
         """Release one car only after the previous car clears the gate corridor."""
@@ -283,14 +368,21 @@ class DigitalTwin:
             car.state = "parked"
             car.x, car.y = slot.x, slot.y
             car.current_speed = 0.0
+            car.parked_started_at = self.elapsed
             car.parked_for = self.rng.uniform(28, 90)
             self.last_event = f"Cảm biến xác nhận {slot.slot_id} đã có xe"
         elif car.state == "leaving":
             self.exit_barrier_open = True
             self.last_plate = car.plate
-            self.last_event = f"Thanh toán không tiền mặt: {car.plate}"
+            car.last_parking_minutes = self.parking_minutes(car)
+            car.last_fee_vnd = self.parking_fee_vnd(car.last_parking_minutes)
+            self.last_event = (
+                f"Thanh toán không tiền mặt: {car.plate} - "
+                f"{car.last_fee_vnd:,} VND"
+            )
             car.state = "waiting"
             car.slot_id = None
+            car.parked_started_at = None
             car.wait_for = self.rng.uniform(10, 38)
             car.current_speed = 0.0
             self.completed_trips += 1
@@ -436,6 +528,7 @@ class DigitalTwin:
                 "entry_barrier": self.entry_barrier_open,
                 "exit_barrier": self.exit_barrier_open,
                 "customer_plate": customer.plate if customer else "---",
+                "billing_rows": self.billing_rows(),
                 "slots": slots_json,
             }
         )
